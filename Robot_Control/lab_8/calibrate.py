@@ -39,6 +39,22 @@ def calibrate(nx, ny, dir, drawcorner=False):
 
         img_size = (img.shape[1], img.shape[0])
 
-    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, img_size, None, None)
-    
-    return ret, mtx, dist, rvecs, tvecs
+    _, mtx, dist, _, _ = cv2.calibrateCamera(objpoints, imgpoints, img_size, None, None)
+
+    return mtx, dist, img_size
+
+
+def undistort(mtx, dist, img_size, alpha=1):
+    new_cam_mtx, valid_roi = cv2.getOptimalNewCameraMatrix(mtx, dist, img_size, alpha, img_size)
+    map_x, map_y = cv2.initUndistortRectifyMap(mtx, dist, None, new_cam_mtx, img_size, cv2.CV_16SC2)
+    return map_x, map_y
+
+
+def undistort_img(image, dir):
+    mtx, dist, img_size = calibrate(8, 5, dir)
+    map_x, map_y = undistort(mtx, dist, img_size)
+    img = cv2.imread(image)
+    img = cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR)
+    cv2.imshow("undistorted", img)
+    cv2.waitKey(0)
+    return img
