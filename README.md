@@ -1,4 +1,4 @@
-Welcome to my Machine Learning Master repository. This collection of materials was created during my studies in the field and provided by knowledgeable lecturers. While the content may contain some errors or room for improvement, it offers a unique insight into my journey through the world of Machine Learning. Please feel free to use these resources for your own learning and exploration.
+Welcome to my Machine Learning Master at University of Warsaw repository. This collection of materials was created during my studies in the field and provided by knowledgeable lecturers. While the content may contain some errors or room for improvement, it offers a unique insight into my journey through the world of Machine Learning. Please feel free to use these resources for your own learning and exploration.
 
 
 Courses from Machine Learning degree:
