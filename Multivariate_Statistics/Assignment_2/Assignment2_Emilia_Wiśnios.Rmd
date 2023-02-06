@@ -1,0 +1,456 @@
+---
+title: "Assignment 2"
+author: "Emilia Wiśnios"
+date: '2023-02-05'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(corrplot)
+library(caret)
+library(MASS)
+library(ggplot2)
+library(rio)
+library(pracma)
+library(olsrr)
+library(glmnet)
+library(ramify)
+library(CCA)
+library(yacca)
+```
+
+## Exercise 1
+
+The file `bodyfat2.xlsx` contains measurements of the percentage of bodyfat for 252 men. The Y-varaible is the bodyfat percentage; there are 13 explanatory variables (X-variables). Do not include 'density' as an explanatory variable.
+
+We'll start from reading the file 
+
+```{r}
+www = 'https://www.mimuw.edu.pl/~noble/courses/MultivariateStatistics/data/bodyfat2.xlsx'
+bodyfat = import(www)
+```
+
+We can check some basic statistics of the data.
+
+```{r}
+summary(bodyfat)
+```
+We have 15 variables, including 13 explanatory variables, target and one column that we are supposed to drop.
+
+```{r}
+drops <- c("density")
+bodyfat = bodyfat[ , !(names(bodyfat) %in% drops)]
+names(bodyfat)
+```
+Now we only have the right columns. We can split it into X and y.
+
+```{r}
+explanatory_variables = c("age", "weight", "height", "neck", "chest", "abdomen", "hip", "thigh", "knee", "ankle", "biceps", "forearm", "wrist") 
+X = bodyfat[ , (names(bodyfat) %in% explanatory_variables)]
+y = bodyfat["bodyfat"]
+```
+
+
+1. Consider the correlations between the 13 explanatory variables. Are the grounds to suspect ill-conditioning?
+
+```{r}
+correlation <- cor(X, X)
+result <- cor.test(as.matrix(X), as.matrix(X))
+print(result)
+corrplot(correlation)
+```
+
+The test statistic t is equal to Inf because the correlation is perfect (i.e. the variables are perfectly positively correlated), which makes the denominator of the t-statistic zero.
+The 95 percent confidence interval for the correlation coefficient is [1, 1], meaning that there is a 95% probability that the true correlation coefficient lies between 1 and 1.
+In the context of correlation analysis, a perfect positive correlation between two variables, represented by a correlation coefficient of 1, can indicate ill-conditioning. This is because a perfect positive correlation means that the variables are directly proportional to each other, and therefore, small variations in one variable will result in exactly proportional variations in the other variable. This can cause numerical instability and lead to inaccuracies in subsequent computations.
+
+We can also perform more standard analysis:
+
+Ill-conditioning is a term used in numerical linear algebra to describe the sensitivity of a matrix to small changes in its entries. It refers to a situation where the linear relationships between the variables in a data set are unstable and may produce unreliable results when used in further analyses.
+
+A matrix is considered to be ill-conditioned if the condition number of the matrix is high. The condition number is a measure of how sensitive the solutions of a linear system are to small perturbations in the coefficients. A high condition number indicates that the matrix is ill-conditioned and the solutions are not reliable.
+
+Ill-conditioning can lead to numerical instability and increase the error in the computed solutions, which can result in incorrect or misleading results in further analyses. To address ill-conditioning, it is often necessary to either transform the data or use a different modeling technique that is less sensitive to ill-conditioning.
+
+It's important to note that a correlation matrix is always symmetric and positive semi-definite, which means that its eigenvalues are always nonnegative. As a result, its condition number is always greater than or equal to 1, and it's not possible to determine ill-conditioning from the correlation matrix alone.
+
+In practice, it's common to use the condition number of the covariance matrix or the precision matrix (the inverse of the covariance matrix) instead of the condition number of the correlation matrix to assess the ill-conditioning of a data set. High condition numbers for these matrices indicate that the linear relationships between variables are unstable and may produce unreliable results when used in further analyses, such as regression or principal component analysis.
+
+1. Condition number: The condition number of a matrix measures how sensitive the solution of a linear system is to changes in the right-hand side. A high condition number indicates that the matrix is ill-conditioned. 
+
+```{r}
+condition_number <- cond(correlation, p = 2)
+print(condition_number)
+```
+A commonly used rule of thumb is to consider the data ill-conditioned if the condition number is greater than 10^15. So based on this condition we cannot say that it's ill-conditioned.
+
+We can also check the covariance matrix:
+```{r}
+centered_df <- scale(X)
+cov_matrix <- cov(centered_df)
+condition_number_cov <- cond(cov_matrix, p = 2)
+print(condition_number_cov)
+```
+
+The result is the same as with correlation matrix.
+
+2. Singular value decomposition (SVD): The SVD of a matrix can also provide information about its condition. If the ratio of the largest to smallest singular value is very large, it suggests that the matrix is ill-conditioned.
+
+```{r}
+svd_result <- svd(correlation)
+list <- svd_result$d
+ratio <- max(list) / min(list)
+print(list)
+print(ratio)
+```
+For the singular values of a matrix, a high singular value is often considered to be any value that is significantly larger than the other singular values. This can indicate that a particular direction in the data is much more important than the others, which may indicate that the data is ill-conditioned. As we can see ratio is much higher than any singular value so we can suspect that the data is ill-conditioned.
+
+
+3. Inverse condition number: The inverse condition number measures the sensitivity of the inverse of a matrix. A high value of the inverse condition number suggests that the matrix is ill-conditioned.
+
+```{r}
+inverse_condition_number <- sum(svd(qr.solve(correlation))$d)/length(svd(qr.solve(correlation))$d)
+print(inverse_condition_number)
+```
+For the inverse condition number, a high inverse condition number is often considered to be any value that is close to 0. This can indicate that the matrix is close to being singular and the linear relationships between the variables are unstable and may produce unreliable results when used in further analyses. A commonly used rule of thumb is to consider the data ill-conditioned if the inverse condition number is less than 10^-15. So we can't say that the matrix is ill-conditioned.
+
+
+
+2. Perform an OLS regression using all 13 explanatory variables. Which variables are significant?
+
+```{r}
+model <- lm(bodyfat ~ ., data = bodyfat)
+summary(model)
+```
+The most significant variables are: abdomen, wrist, forearm, neck, age
+
+
+3. Perform Forwards Stepwise and Backward Elimination procedures. What are the resulting models? 
+
+We'll use the stepAIC() function from the MASS library. The stepAIC() function performs a stepwise regression, either forward or backward, based on the Akaike Information Criterion (AIC). The AIC measures the quality of a statistical model and balances the fit of the model against the number of variables included in the model. The stepAIC() function starts with an empty model and either adds variables one at a time (forwards) or removes variables one at a time (backwards) based on their contribution to the AIC.
+
+Forward Elimination: 
+
+```{r}
+model_fw <- stepAIC(lm(bodyfat ~ ., data = bodyfat), direction = "forward", trace=0)
+summary(model_fw)
+```
+
+Backward Elimination:
+
+```{r}
+model_bw <- stepAIC(lm(bodyfat ~ ., data = bodyfat), direction = "backward", trace=0)
+summary(model_bw)
+```
+The best model have following variables: bodyfat ~ age + weight + neck + abdomen + hip + thigh + forearm + wrist
+
+
+Note that stepwise regression is a controversial method, as it can lead to overfitting and can be affected by the order of the variables. It is often recommended to use more rigorous model selection methods, such as cross-validation or regularization, to avoid these issues.
+
+
+4. Use leave-one-out cross-validation for estimating the mean prediction error as a criterion for model selection. Which subset of variables gives the best model based on this criterion?
+
+```{r}
+control = trainControl(method="LOOCV")
+full_model = train(bodyfat ~ ., data = bodyfat, method = "lm", trControl = control, metric = "RMSE")
+backward_model = train(bodyfat ~ age + weight + neck + abdomen + hip + thigh + forearm + wrist, 
+                       data = bodyfat, method = "lm", trControl = control, metric = "RMSE")
+print(full_model)
+```
+The best subset for this criterion are: abdomen, wrist, forearm, neck, age.
+
+```{r}
+print(backward_model)
+```
+
+5. Apply LASSO to the bodyfat dataset. Indicate the LASSO path and decide on a suitable model. Justify your choice.
+
+```{r}
+fit <- glmnet(X, bodyfat$bodyfat, alpha = 1)
+
+# Plot the LASSO path
+plot(fit, xvar = "lambda", label = TRUE)
+```
+The LASSO path shows the coefficients of the predictor variables as a function of the regularization parameter lambda. The horizontal lines represent the different models, with the shortest line (i.e., the one closest to zero) corresponding to the model with the largest coefficients.
+
+```{r}
+cv.fit <- cv.glmnet(as.matrix(X), as.matrix(bodyfat$bodyfat), alpha = 1)
+
+# Choose the best model based on cross-validated MSE
+best.lambda <- cv.fit$lambda.min
+best.model <- coef(cv.fit, s = best.lambda)
+best.model 
+```
+In this scenario, the variables with non-zero coefficients in the LASSO model are considered the best variables. The variables with non-zero coefficients in this LASSO model are: age, weight, height, neck, chest, abdomen, hip, thigh, ankle, biceps, forearm, wrist.
+
+These variables are considered the best because they have a significant impact on the response variable, as indicated by their non-zero coefficients. The magnitude of the coefficients can also be used to determine the importance of each variable in the model.
+
+
+## Exercise 2
+
+Consider the `car marks` dataset in  `carmarks.txt` in the course data directory. The data are averaged marks for 24 cars from a sample of 40 persons. The marks range from 1 (very good) to 6 (very bad). The first two columns contain 'type' and 'model'. The next 8 columns contain the variables: economy, service, non-deprication of value, price (1 is cheapest), design, sporty car, safety, easy handling. Let the X variable be (price, value stability) and let the Y variables be (economy, service, design, sporty car, safety, easy handling). Perform a canonical correlation analysis on the data and draw suitable conclusions.
+
+```{r}
+url = 'https://www.mimuw.edu.pl/~noble/courses/MultivariateStatistics/data/carmarks.txt'
+car_marks_data = read.csv(url, sep=";")
+X = car_marks_data[, 4:5]
+Y = car_marks_data[, c(2:3, 6:9)]
+```
+
+Now we see all the variables of the dataset. Let's prepare the data: 
+
+Now we can perform canonical correlation analysis. 
+
+Canonical Correlation Analysis (CCA) is a statistical technique used to study the relationships between two sets of variables. It provides information about the linear relationships between the variables in the two sets and the strength of these relationships.
+
+CCA aims to find linear combinations of variables in each set such that the correlation between these combinations is maximized. These linear combinations are called "canonical variables" and the correlation between them is called the "canonical correlation".
+
+There are two libraries that offer Canonical Correlation Analysis. We will perform both and compare the results
+
+```{r}
+cca_result = cca(X, Y, xscale = TRUE, yscale = TRUE)
+cca_result
+```
+
+```{r}
+res <- cc(X, Y)
+print(res)
+```
+The results indicate a high likelihood of correlation between the two groups of variables in both implementations.
+
+
+## Excercise 3
+
+Consider the data in the file `primate.scupulae.xslx` in the course data directory; the object is to carry out discriminant function analysis. Carry out five linear disciminant analyses (one for each primate spieces), where each analysis is of form 'one class versus the rest' (i.e. for each of the 5 analyses, you pose the question 'is it in class i or is it in one of the other classes?). Find the spatial zone (known as the ambigous region) that does not correspond to any LDA assignment of a class of primate out of the five considered (i.e. where, from your 5 analyses, you do not get a clear answer for which class the observation belongs to).
+Suppose that LDA boundaries are found for the primate.scapulae data by carring out a sequence of 10 LDA problems, each involving a dictinct pair of primate species. Find the ambigous region that does not correspond to any LDA assignment of a class of primate (out of these five considered). Suppose we classify each primate in the dataset by taking a vaote based upon these boundaries. Estimate the resulting missclassification rate and compare it with the rate from the multi-class classification procedure.
+
+First we need to read the data and delete some columns (without this step this is impossible to do LDA due to singularities in the dataset).
+
+```{r}
+url = 'https://www.mimuw.edu.pl/~noble/courses/MultivariateStatistics/data/primate.scapulae.xlsx'
+primate_scapulae_data = import(url)
+primate_scapulae_data = primate_scapulae_data[, c(2:8, 11)]
+primate_scapulae_data <- na.omit(primate_scapulae_data)
+names(primate_scapulae_data)
+```
+
+Now we can create five datasets, one for each category.
+
+```{r}
+data1 = primate_scapulae_data[primate_scapulae_data$classdigit == 1, ]
+data2 = primate_scapulae_data[primate_scapulae_data$classdigit == 2, ]
+data3 = primate_scapulae_data[primate_scapulae_data$classdigit == 3, ]
+data4 = primate_scapulae_data[primate_scapulae_data$classdigit == 4, ]
+data5 = primate_scapulae_data[primate_scapulae_data$classdigit == 5, ]
+
+```
+
+We can now aggregate data, calculate lda for each  of the datasets and plot the data.
+
+```{r}
+# Create a list of data frames for each species
+primate_classes = list(data1, data2, data3, data4, data5)
+
+# Create a list to store the LDA models
+ldalist = list()
+
+# Perform LDA for each species vs the rest
+for (i in 1:5) {
+  pos = primate_classes[[i]]
+  neg = primate_scapulae_data[!(primate_scapulae_data$classdigit %in% c(i)), ]
+  lda_fit = lda(classdigit ~ ., data = rbind(pos, neg))
+  ldalist[[i]] = lda_fit
+}
+
+# Plot the boundaries for each LDA
+plot(ldalist[[1]])
+plot(ldalist[[2]])
+plot(ldalist[[3]])
+plot(ldalist[[4]])
+plot(ldalist[[5]])
+```
+
+To locate the ambiguous region, we need to identify the rows that have not been assigned any class. This can be achieved by summing the columns and determining the rows where the sum is equal to zero.
+```{r, include=FALSE}
+primate_scapulae_data$cls1 = (primate_scapulae_data$classdigit == 1)
+primate_scapulae_data$cls2 = (primate_scapulae_data$classdigit == 2)
+primate_scapulae_data$cls3 = (primate_scapulae_data$classdigit == 3)
+primate_scapulae_data$cls4 = (primate_scapulae_data$classdigit == 4)
+primate_scapulae_data$cls5 = (primate_scapulae_data$classdigit == 5)
+
+lda1 = lda(cls1 ~ . - classdigit - cls2 - cls3 - cls4 - cls5, data = primate_scapulae_data, CV = TRUE)
+lda2 = lda(cls2 ~ . - classdigit - cls1 - cls3 - cls4 - cls5, data = primate_scapulae_data, CV = TRUE)
+lda3 = lda(cls3 ~ . - classdigit - cls1 - cls2 - cls4 - cls5, data = primate_scapulae_data, CV = TRUE)
+lda4 = lda(cls4 ~ . - classdigit - cls1 - cls2 - cls3 - cls5, data = primate_scapulae_data, CV = TRUE)
+lda5 = lda(cls5 ~ . - classdigit - cls1 - cls2 - cls3 - cls4, data = primate_scapulae_data, CV = TRUE)
+
+preds = cbind(lda1$class, lda2$class, lda3$class, lda4$class, lda5$class)
+preds[preds == 1] = 0
+preds[preds == 2] = 1
+```
+
+```{r}
+which(rowSums(preds) == 0)
+```
+We can further examine the ambiguity by evaluating the cases where more than one class has been assigned across all LDAs.
+
+```{r}
+which(rowSums(preds) > 1)
+```
+We now want to generate a voting prediction while excluding the ambiguous region and then calculate the classification accuracy.
+
+```{r}
+final_preds = argmax(preds)
+final_preds[which(rowSums(preds) == 0)] = -1
+final_preds[which(rowSums(preds) > 1)] = -1
+mean(final_preds == primate_scapulae_data$classdigit)
+```
+
+To compare it with multi-class model, we firstly train model on full data and calculate accuracy.
+```{r}
+lda_full = lda(classdigit ~ . - cls1 - cls2 - cls3 - cls4 - cls5, data = primate_scapulae_data, CV = TRUE)
+mean(lda_full$class == primate_scapulae_data$classdigit)
+```
+
+Multi-class model obtains significantly higher accuracy.
+
+## Exercise 4
+
+There are 506 observations on census tracts in the Boston Standard Metropolitan Statistical Area (SMSA) in the 1970. For the response variable, use the logarithm of MEDV, the median value of owner-occupied houses in thousands of dollars. There are 13 input variables (plus information on the location of each observation). The 13 explanatory variables are: CRIM, ZN, INDUS, CHAS, NOX, RM, AGE, DIS, RAD, TAX, PTRATIO, B, LSTAT. Compute the OLS estimates.
+Note: The first few lines are text and should be removed from the file. Also, not all the instantions are complete. Remove the incomplete instantions before analysing the data).
+
+```{r}
+url = 'https://www.mimuw.edu.pl/~noble/courses/MultivariateStatistics/data/boston_corrected.txt'
+housing = read.csv(url, header=TRUE, skip=9, sep='\t')
+names(housing)
+```
+
+```{r}
+variables = c('CRIM', 'ZN', 'INDUS', 'CHAS', 'NOX', 'RM', 'AGE', 'DIS', 'RAD', 'TAX', 'PTRATIO', 'B', 'LSTAT', 'MEDV')
+housing = housing[, variables]
+summary(housing)
+```
+
+1. Compute OLS parameter estimates. Which variables are significant? Perform OLS estimation with a model which only includes these significant variables. What is the coefficient of determination R^2?
+
+```{r}
+reg = lm(log(MEDV) ~ ., data = housing)
+summary(reg)
+```
+
+Based on the results, it can be concluded that only the variables INDUS and AGE are not significant at a significance level of 0.01. As a result, it is appropriate to perform Ordinary Least Squares (OLS) regression without these variables.
+
+```{r}
+reg = lm(log(MEDV) ~ . - INDUS - AGE, data = housing)
+summary(reg)
+```
+The full model demonstrated a coefficient of determination ($R^2$) of 0.7896, indicating that approximately 79% of the variance in the dependent variable (log(MEDV)) was explained by the predictors. In the reduced model, where the variables INDUS and AGE were omitted, the coefficient of determination was 0.7891, with a similar explanation of variance.
+
+Additionally, at a significance level of less than 0.001, the variables ZN and CHAS can also be excluded from the regression model.
+
+```{r}
+reg_ = lm(log(MEDV) ~ . - INDUS - AGE - ZN - CHAS, data = housing)
+summary(reg_)
+```
+In this scenario, the coefficient of determination ($R^2$) is calculated as 0.7834, which is slightly lower compared to the previous models.
+
+2. Perform a forwards (stepwise) selection procedure. What is the resulting model? What is the coefficient of determination?
+
+```{r}
+reg_step_aic = step(lm(log(MEDV) ~ 1, data = housing), 
+                scope = list(lower = lm(log(MEDV) ~ 1, data = housing), 
+                             upper = lm(log(MEDV) ~ ., data = housing)), 
+                direction = "forward", trace=FALSE)
+summary(reg_step_aic)
+```
+When using the Akaike Information Criterion (AIC) as the selection criterion, the resulting model included all variables and had a coefficient of determination ($R^2$) equal to 0.7891.
+
+```{r}
+reg_step_bic = step(lm(log(MEDV) ~ 1, data = housing), 
+                scope = list(lower = lm(log(MEDV) ~ 1, data = housing), 
+                             upper = lm(log(MEDV) ~ ., data = housing)), 
+                direction = "forward", 
+                k = log(nrow(housing)), 
+                trace = 0)
+summary(reg_step_bic)
+```
+For the Bayesian Information Criterion (BIC) as the selection criterion, the variable ZN was omitted from the model. This resulted in a coefficient of determination ($R^2$) equal to 0.7874, which is slightly smaller compared to the model obtained using AIC as the criterion.
+
+If only the coefficient of determination ($R^2$) was used as the selection criterion, one would intuitively keep the insignificant variables in the model. The coefficient of determination ($R^2$) measures the proportion of variability in the response variable that is explained by the predictor variables in a regression model. In general, a higher $R^2$ value indicates a better fit of the model to the data. However, if the goal is to obtain a parsimonious and interpretable model, adding insignificant predictors to the model can lead to overfitting and reduce the interpretability of the model.
+
+3. Build models using Mallow's C_p statistic (also AIC, BIC).
+
+```{r}
+mod1 = ols_mallows_cp(reg_step_aic, reg)
+mod1
+```
+
+```{r}
+mod2 = ols_mallows_cp(reg_step_bic, reg)
+mod2
+```
+
+Mallow's Cp statistic is a statistical measure used in model selection that provides information about the goodness of fit of a regression model compared to the number of parameters in the model. The statistic measures the difference between the residual sum of squares (RSS) of a model and the minimum possible RSS that could be achieved by an ideal model that fits the data exactly.
+
+It is used to balance the trade-off between the goodness of fit of the model and the complexity of the model. The statistic provides a measure of the expected test error of the model, which can be used to compare different models and select the one with the lowest expected test error.
+
+A Mallows' Cp value that is close to the number of predictors plus the constant indicates that the model produces relatively precise and unbiased estimates. A Mallows' Cp value that is greater than the number of predictors plus the constant indicates that the model is biased and does not fit the data well. 
+
+In our analysis, the Mallow's Cp statistic for the model selected using the Bayesian Information Criterion (BIC) as the selection criterion is higher compared to the model selected using the Akaike Information Criterion (AIC). Furthermore, this higher Mallow's Cp statistic using BIC is also greater than the number of predictors in the model. This finding may suggest that the model is overfitting the data, as overfitting occurs when a model is too complex and fits the noise in the data rather than the underlying relationship. This can result in a high Mallow's Cp statistic, as well as decreased generalization performance on unseen data. Additionally, if the Mallow's Cp statistic is higher than the number of predictors, it indicates that the model may be overly complex and the predictors may be highly correlated or redundant.
+
+
+4. Compute Ridge Regression estimates. What is the optimal ridge parameter? How many significant parameters does the ridge regression model contain? Compare with the model obtained by forwards stepwise selection. Compare the mean squared prediction error $|Y = \hat{\mu}|^2$ for ridge regression and forward stepwise.
+
+```{r}
+fit.ridge = cv.glmnet(x=as.matrix(housing[,-14]), y=as.matrix(housing["MEDV"]), alpha = 0)
+optimal.lambda = fit.ridge$lambda.min
+ridge_reg = fit.ridge$glmnet.fit
+coef.ridge = coef(ridge_reg, s = optimal.lambda)
+print(optimal.lambda)
+```
+
+We can check significant variables:
+```{r}
+coef.ridge
+```
+It seems as the intercept was the most important variable.There are 8 potentially insignificant variables. Obtained model seems to be much worse, than the step forward model.
+
+Now we can calculate the error:
+
+```{r}
+MSPE_forward = mean((reg_step_aic$fitted.values - log(housing$MEDV))^2)
+MSPE_ridge = mean((predict(ridge_reg, newx=as.matrix(housing[,-14]), s=optimal.lambda) - log(housing$MEDV))^2)
+c(MSPE_forward, MSPE_ridge)
+```
+
+Error for ridge regression is much higher.
+
+5. Build a model using LASSO. The LASSO procedure involves LARS. How many parameters are included in the model? How does this compare with ridge regression and forwards stepwise? Which model has the smallest mean squared prediction error?
+
+
+```{r}
+fit <- glmnet(housing[,-14], log(housing$MEDV), alpha = 1)
+
+# Plot the LASSO path
+plot(fit, xvar = "lambda", label = TRUE)
+cv.fit <- cv.glmnet(as.matrix(housing[,-14]), as.matrix(log(housing$MEDV)), alpha = 1)
+
+# Choose the best model based on cross-validated MSE
+best.lambda <- cv.fit$lambda.min
+lasso_reg_coef<- coef(cv.fit, s = best.lambda)
+lasso_reg = cv.fit$glmnet.fit
+lasso_reg_coef 
+
+```
+
+
+This model has potentially 6 insignificant variables.
+
+```{r}
+MSPE_lasso = mean((predict(lasso_reg, newx=as.matrix(housing[,-14]), s=best.lambda) - log(housing$MEDV))^2)
+MSPE_lasso
+```
+
+
+The error is similar to the step forward model.
